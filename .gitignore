@@ -1,0 +1,27 @@
+# Python caches / builds
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual envs (any subfolder)
+.venv/
+**/.venv/
+
+# uv lockfile (per package gitignore)
+uv.lock
+
+# Local config & runtime data
+**/config/config.toml
+**/.mcp_aas/
+*.log
+
+# One-off local backup created while stripping docstrings — not for publication
+**/mcp_aas_docstrings_backup_*/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

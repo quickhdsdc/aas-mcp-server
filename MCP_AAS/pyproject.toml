@@ -1,0 +1,55 @@
+[project]
+name = "mcp-aas"
+version = "0.1.0"
+description = "Standalone MCP server exposing Asset Administration Shell (AAS) tools over the Model Context Protocol."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Dachuan Shi" }]
+keywords = ["aas", "asset-administration-shell", "basyx", "mcp", "model-context-protocol", "industry-4.0"]
+
+dependencies = [
+    "mcp>=1.2.0",
+    "pydantic>=2.0",
+    "httpx>=0.27",
+    "basyx-python-sdk>=1.0",
+    "pyecma376-2>=1.0",
+    "pandas>=2.0",
+    "python-dateutil>=2.8",
+    "loguru>=0.7",
+]
+
+[project.optional-dependencies]
+# Semantic tools (aas_search_property, aas_match_inputs) — Azure/OpenAI
+# embeddings + faiss ranking. Without this extra the base server still runs;
+# those two tools are simply not registered.
+semantic = [
+    "faiss-cpu>=1.7",
+    "numpy>=1.24",
+    "networkx>=3.0",
+    "langchain-openai>=0.1",
+    "openai>=1.0",
+]
+
+[project.scripts]
+mcp-aas = "mcp_aas.server:main"
+
+[project.urls]
+Homepage = "https://github.com/quickhdsdc/aas-mcp-server"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_aas"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

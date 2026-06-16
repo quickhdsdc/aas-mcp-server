@@ -1,0 +1,27 @@
+# LLM profiles — ONLY required for the optional semantic tools
+# (aas_search_property, aas_match_inputs). The core BaSyx tools need no LLM.
+#
+# Copy this file to `config/config.toml` (or point MCP_AAS_CONFIG_FILE at it)
+# and fill in real credentials. Embeddings use Azure OpenAI
+# `text-embedding-3-large`.
+#
+# The top-level [llm] table is the "default" profile. Sub-tables such as
+# [llm.embedding] become named profiles that inherit the default keys; the
+# semantic tools look for an azure-typed profile among: embedding, azure, default.
+
+[llm]
+model = "gpt-4o"                       # chat/ranking deployment name
+base_url = "https://YOUR-RESOURCE.openai.azure.com/"
+api_key = "REPLACE_ME"
+api_type = "azure"                     # azure | openai
+api_version = "2024-08-01-preview"
+max_completion_tokens = 4096
+temperature = 1.0
+
+# Optional explicit embedding profile (used if [llm] is not azure-typed):
+# [llm.embedding]
+# model = "text-embedding-3-large-1"
+# base_url = "https://YOUR-RESOURCE.openai.azure.com/"
+# api_key = "REPLACE_ME"
+# api_type = "azure"
+# api_version = "2024-08-01-preview"
