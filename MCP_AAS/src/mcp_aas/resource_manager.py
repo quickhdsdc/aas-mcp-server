@@ -99,8 +99,14 @@ async def poll_manifests(
         logger.info("poll_manifests: polling disabled (interval <= 0)")
         return
 
-    # Seed the signature from the current state so the first tick doesn't
-    # trigger a redundant refresh right after startup.
+    # Build the manifests once at startup, then seed the signature so the first
+    # tick doesn't trigger a redundant refresh. Without this initial build the
+    # loop only ever refreshes on a *change*, leaving both lookup_*_manifest
+    # tools empty until someone adds or removes a shell.
+    try:
+        await refresh_manifests(endpoint)
+    except Exception as e:
+        logger.warning(f"poll_manifests: initial refresh failed, will retry on next tick: {e}")
     _last_shell_signature = await _compute_shell_signature(endpoint)
     logger.info(
         f"poll_manifests: started, interval={interval_seconds}s, "

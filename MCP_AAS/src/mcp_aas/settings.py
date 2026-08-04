@@ -47,3 +47,17 @@ MANIFEST_POLL_INTERVAL = float(os.getenv("MCP_AAS_MANIFEST_POLL_INTERVAL", "0") 
 # ---------------------------------------------------------------------------
 MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
+
+# ---------------------------------------------------------------------------
+# Create the work directories up-front. Several tools list TEMP_DIR to find a
+# cached graph before anything has ever written to it (aas_read_property,
+# aas_write_property, aas_describe_property, aas_search_property), so on a
+# fresh install those calls would fail with FileNotFoundError instead of the
+# intended "run aas_parse first" hint.
+# ---------------------------------------------------------------------------
+for _work_dir in (TEMP_DIR, ATTACHMENTS_DIR, MANIFEST_DIR, RECORDS_DIR):
+    try:
+        os.makedirs(_work_dir, exist_ok=True)
+    except Exception:
+        # A read-only filesystem must not stop the server from starting.
+        pass

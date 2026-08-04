@@ -188,7 +188,14 @@ class MCPServer:
         parameters = []
         for param_name, param_details in param_props.items():
             param_type = param_details.get("type", "")
-            default = Parameter.empty if param_name in required_params else None
+            # Optional params must carry the schema's own default, not None —
+            # FastMCP fills omitted arguments from this signature, so hardcoding
+            # None here silently overrode defaults like asset_kind="Instance".
+            default = (
+                Parameter.empty
+                if param_name in required_params
+                else param_details.get("default", None)
+            )
 
             annotation = Any
             if param_type == "string":
