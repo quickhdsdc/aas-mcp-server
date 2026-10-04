@@ -139,9 +139,9 @@ class MCPServer:
         tool_function = tool_param["function"]
 
         async def tool_method(**kwargs):
-            logger.info(f"Executing {tool_name}: {kwargs}")
+            logger.info("Executing %s", tool_name)
             result = await tool.execute(**kwargs)
-            logger.info(f"Result of {tool_name}: {result}")
+            logger.info("Completed %s", tool_name)
             if hasattr(result, "model_dump"):
                 return json.dumps(result.model_dump())
             elif isinstance(result, dict):
