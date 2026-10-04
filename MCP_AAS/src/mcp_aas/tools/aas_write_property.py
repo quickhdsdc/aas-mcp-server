@@ -62,13 +62,10 @@ class AASWriteProperty(BaseTool):
 
             from mcp_aas.resource_manager import TEMP_DIR
             # Step 1: Load graph
-            graph_path = None
-            for file in os.listdir(TEMP_DIR):
-                if file.endswith("_graph.json") and aas_idShort in file:
-                    graph_path = os.path.join(TEMP_DIR, file)
-                    break
+            from mcp_aas.semantic.runtime import cache_file
+            graph_path = cache_file(aas_idShort, "_graph.json")
 
-            if not graph_path:
+            if not graph_path.exists():
                 return ToolResult(output="No cached Graph JSON file found. Should execute first the function aas_parse(endpoint, id).")
 
             with open(graph_path, 'r', encoding='utf-8') as f:
@@ -84,14 +81,17 @@ class AASWriteProperty(BaseTool):
             # Step 2: Write value(s) via BaSyx API
             client = BasyxApiClient(endpoint, headers={"accept": "application/json", "Content-Type": "application/json"})
             result_lines: list[str] = []
+            failed = 0
 
             for item in updates:
                 item_id_short = item.get("prop_idShort") if isinstance(item, dict) else None
                 item_value = item.get("value") if isinstance(item, dict) else None
                 if not item_id_short:
+                    failed += 1
                     result_lines.append("  [invalid] missing prop_idShort in one updates item")
                     continue
                 if item_value is None:
+                    failed += 1
                     result_lines.append(f"  [invalid] idShort '{item_id_short}' missing value")
                     continue
 
@@ -100,6 +100,7 @@ class AASWriteProperty(BaseTool):
                     if data.get("idShort") == item_id_short
                 ]
                 if not matches:
+                    failed += 1
                     result_lines.append(f"  '{item_id_short}': no matching property found")
                     continue
 
@@ -109,17 +110,23 @@ class AASWriteProperty(BaseTool):
                     id_short = node_data.get("idShort")
 
                     if not api_path:
+                        failed += 1
                         result_lines.append(f"  '{id_short}' (path: {node_id}): API path not available")
                         continue
 
                     try:
+                        from mcp_aas.semantic.values import typed_value
+                        live = await client.get(api_path)
+                        payload = typed_value(live, item_value)
                         value_api = api_path + "/$value"
-                        await client.patch(value_api, data=json.dumps(str(item_value)))
+                        await client.patch(value_api, data=json.dumps(payload), reraise=True)
                         result_lines.append(f"  '{id_short}' (path: {node_id}): updated to {item_value}")
                     except Exception as e:
+                        failed += 1
                         result_lines.append(f"  '{id_short}' (path: {node_id}): write failed - {e}")
 
-            return ToolResult(output="\n".join(result_lines))
+            return ToolResult(output="\n".join(result_lines),
+                              error=f"{failed} property write(s) failed" if failed else None)
 
         except Exception as e:
             return ToolResult(error=f"write_aas_property failed: {str(e)}")

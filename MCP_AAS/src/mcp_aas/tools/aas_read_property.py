@@ -39,13 +39,10 @@ class AASReadProperty(BaseTool):
 
             from mcp_aas.resource_manager import TEMP_DIR
             # Step 1: Load graph
-            graph_path = None
-            for file in os.listdir(TEMP_DIR):
-                if file.endswith("_graph.json") and aas_idShort in file:
-                    graph_path = os.path.join(TEMP_DIR, file)
-                    break
+            from mcp_aas.semantic.runtime import cache_file
+            graph_path = cache_file(aas_idShort, "_graph.json")
 
-            if not graph_path:
+            if not graph_path.exists():
                 return ToolResult(output="No cached Graph JSON file found. Should execute first the function aas_parse(endpoint, id).")
 
             with open(graph_path, 'r', encoding='utf-8') as f:

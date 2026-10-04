@@ -1,6 +1,6 @@
 [project]
 name = "mcp-aas"
-version = "0.1.0"
+version = "0.2.0"
 description = "Standalone MCP server exposing Asset Administration Shell (AAS) tools over the Model Context Protocol."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,18 +16,16 @@ dependencies = [
     "pyecma376-2>=1.0",
     "pandas>=2.0",
     "python-dateutil>=2.8",
+    "networkx>=3.0",
     "loguru>=0.7",
 ]
 
 [project.optional-dependencies]
 # Semantic tools (aas_search_property, aas_match_inputs) — Azure/OpenAI
-# embeddings + faiss ranking. Without this extra the base server still runs;
+# embeddings + exact cosine ranking. Without this extra the base server still runs;
 # those two tools are simply not registered.
 semantic = [
-    "faiss-cpu>=1.7",
     "numpy>=1.24",
-    "networkx>=3.0",
-    "langchain-openai>=0.1",
     "openai>=1.0",
 ]
 

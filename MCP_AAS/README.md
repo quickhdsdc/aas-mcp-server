@@ -26,7 +26,7 @@ agent — no `app.*` dependencies, installable on its own.
 | `lookup_resource_manifest` | Overview of crawled AAS instances (needs crawler, see below) |
 | `lookup_service_manifest` | Overview of delegated services/operations (needs crawler) |
 
-**Semantic (optional `[semantic]` extra — Azure/OpenAI embeddings + faiss):**
+**Semantic (optional `[semantic]` extra — Azure/OpenAI embeddings + exact cosine ranking):**
 
 | Tool | Purpose |
 |------|---------|
@@ -104,10 +104,62 @@ empty manifest.
 ### Semantic tools
 
 `aas_search_property` and `aas_match_inputs` require the `[semantic]` extra **and**
-an Azure-typed LLM profile. Copy `config/config.example.toml` to
+an Azure or OpenAI-compatible LLM profile. Copy `config/config.example.toml` to
 `config/config.toml` and fill in credentials (or point `MCP_AAS_CONFIG_FILE` at
 your own file).
 
 ## License
 
 MIT
+
+## Search, match and populate
+
+The MCP server keeps its 12 tool names. Search and matching share a corpus cache,
+invalidated when descriptors or the embedding deployment change. Retrieval uses
+normalized vectors and exact cosine ranking; returned hits include scores,
+addressable paths, parent boundaries and actual siblings. Descriptors include
+split idShort words and ConceptDescription definitions, preferred names and units.
+List members remain addressable by position.
+
+`aas_match_inputs` accepts extracted entity JSON in the attachments directory:
+
+```json
+[{"entity": "Rated capacity", "description": "Nominal battery capacity", "value": "68", "unit": "Ah", "source": "datasheet.pdf p.3"}]
+```
+
+Writable candidates and candidate containers are ranked separately. The defaults
+are `theta_high=0.8`, `theta_low=0.5`, `top_k=5`: scores at or above the upper
+threshold are accepted, scores below the lower threshold are rejected as direct
+matches, and the middle band is arbitrated with the parent boundary in context.
+The hosting decision may reject all containers. There is no hardcoded destination
+collection. `create_in` supplies an explicit fallback collection/list when needed;
+`no_arbitration=true` disables chat calls while retaining embedding retrieval.
+
+Matching always reads the current entities file and produces a reviewable plan.
+The result remains a JSON list with `query` and `chosen_candidate`, with additional
+`decision`, `warnings`, target identity and threshold fields. Decisions explicitly
+record `write`, `create` or `skip`, the target path, type, reason and source.
+Unit mismatches are warnings; values are not automatically converted.
+
+Review the plan before calling `aas_populate_inputs`. `dry_run=true` validates the
+plan without applying it; `skip_warnings=true` omits warned decisions. Population
+checks the live target belongs to the requested AAS, enforces list child types,
+and reports individual HTTP failures. It supports Property, Range,
+MultiLanguageProperty, File and ReferenceElement creation and type-specific
+ValueOnly writes. Legacy matching files are also accepted and checked against the
+live target. After successful population the cached AAS snapshot and graph refresh.
+
+Set `embedding_model` to your actual embedding model or Azure deployment name.
+An optional `[llm.embedding]` profile can use a different provider from chat;
+chat resolves `[llm]` or `[llm.azure]`. OpenAI-compatible endpoints use `base_url`.
+Only property descriptors and query data needed for retrieval/arbitration are sent
+to the configured model services. Core BaSyx tools need no model credentials.
+
+## Validation
+
+```bash
+python -m pytest -q
+# Optional live test: creates/deletes a unique synthetic AAS and uses a local
+# deterministic model endpoint, without external model calls.
+MCP_AAS_TEST_ENDPOINT=http://localhost:8081 python -m pytest tests/test_mcp_live.py -q
+```

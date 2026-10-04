@@ -1,348 +1,151 @@
-from mcp_aas.tools.base import BaseTool, ToolResult
-from mcp_aas.aas_utils.basyx_client import BasyxApiClient
-import os
+"""Apply reviewed matching decisions with typed values and target ownership checks."""
 import json
 import re
-import unicodedata
-from typing import Optional
+from dataclasses import fields
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
+
+from mcp_aas.tools.base import BaseTool, ToolResult
+from mcp_aas.aas_utils.basyx_client import BasyxApiClient, encode_id, decode_id
 from mcp_aas.resource_manager import TEMP_DIR, DEFAULT_AAS_ENDPOINT
-from mcp_aas.aas_utils import aas_loader
-
-IDSHORT_ALLOWED = re.compile(r"[A-Za-z0-9_]*$")
-IDSHORT_MUST_START_ALPHA = re.compile(r"^[A-Za-z].*$")
-
-def make_valid_idshort(raw: str, *, prefix_if_needed: str = "X",
-                       min_len: int = 1, max_len: Optional[int] = 128) -> str:
-    if raw is None:
-        raw = ""
-    s = str(raw).strip()
-
-    # Transliterate to ASCII
-    s = unicodedata.normalize("NFKD", s)
-    s = s.encode("ascii", "ignore").decode("ascii")
-
-    # Replace disallowed chars with underscore
-    s = re.sub(r"[^A-Za-z0-9_]+", "_", s)
-
-    # Collapse multiple underscores
-    s = re.sub(r"_+", "_", s).strip("_")
-
-    # Ensure starts with a letter
-    if not s or not IDSHORT_MUST_START_ALPHA.match(s):
-        s = (prefix_if_needed + s).lstrip("_")
-
-    # Enforce min/max length
-    if len(s) < min_len:
-        s = s + ("_" * (min_len - len(s)))
-    if max_len is not None and len(s) > max_len:
-        s = s[:max_len]
-
-    # Final hard validation
-    if not IDSHORT_ALLOWED.fullmatch(s):
-        raise ValueError(f"idShort contains invalid characters after normalization: {s!r}")
-    if not IDSHORT_MUST_START_ALPHA.match(s):
-        raise ValueError(f"idShort must start with a letter after normalization: {s!r}")
-
-    return s
 
 
-def _ensure_ml_value(current, new_text: str, lang: str = "en"):
-    lang = (lang or "en").lower()
-    if not isinstance(current, list):
-        return [{"language": lang, "text": str(new_text or "")}]
-    # normalize language keys to lowercase, update if exists
-    updated = False
-    out = []
-    for item in current:
-        if not isinstance(item, dict):
-            continue
-        il = str(item.get("language", "")).lower()
-        it = str(item.get("text", ""))
-        if il == lang:
-            out.append({"language": lang, "text": str(new_text or "")})
-            updated = True
-        else:
-            out.append({"language": il, "text": it})
-    if not updated:
-        out.append({"language": lang, "text": str(new_text or "")})
-    return out
+def target_path(candidate, owned):
+    path = candidate.get("API_path") or candidate.get("apiPath") or ""
+    parsed = urlsplit(path)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("Matching target must be a relative BaSyx API path")
+    parts = parsed.path.split("/", 4)
+    if len(parts) < 3 or parts[1] != "submodels":
+        raise ValueError("Matching target must name a submodel")
+    owner = decode_id(unquote(parts[2]))
+    if owner not in owned:
+        raise ValueError("Matching target is not linked to the requested AAS")
+    if len(parts) > 3 and (parts[3] != "submodel-elements" or len(parts) < 5):
+        raise ValueError("Invalid submodel-element path")
+    if len(parts) == 5 and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(?:\[\d+\]|\.[A-Za-z][A-Za-z0-9_]*)*", unquote(parts[4])):
+        raise ValueError("Invalid AAS element path")
+    return path.rstrip("/")
 
 
 class AASPopulateInputs(BaseTool):
     name: str = "aas_populate_inputs"
-    description: str = (
-        "populates the value of AAS properties according to the AAS-Input entity matching results. If match_result_path does not exist, please call aas_match_inputs() first."
-    )
-    parameters: dict = {
-        "type": "object",
-        "properties": {
-            "endpoint": {
-                "type": "string",
-                "description": f"The base URL of the AAS server. Optional. (default: {DEFAULT_AAS_ENDPOINT})"
-            },
-            "match_result_path": {
-                "type": "string",
-                "description": "The path of the AAS-Input entity matching result file."
-            },
-            "aas_idShort": {
-                "type": "string",
-                "description": "The idShort of the AAS that to be populated according to the input values."
-            }
-        },
-        "required": ["match_result_path", "aas_idShort"]
-    }
+    description: str = "Apply a reviewed match plan. Supports typed writes/creation and legacy matching files; validates AAS ownership and reports failures."
+    parameters: dict = {"type": "object", "properties": {
+        "match_result_path": {"type": "string", "description": "Reviewed aas_match_inputs result JSON path."},
+        "aas_idShort": {"type": "string", "description": "Target AAS idShort."},
+        "endpoint": {"type": "string", "description": "BaSyx endpoint."},
+        "dry_run": {"type": "boolean", "default": False, "description": "Validate and preview without changing BaSyx."},
+        "skip_warnings": {"type": "boolean", "default": False, "description": "Skip decisions carrying warnings, including unit mismatches."},
+    }, "required": ["match_result_path", "aas_idShort"]}
 
-    async def execute(self, match_result_path: str, aas_idShort: str, endpoint: Optional[str] = None, **kwargs) -> ToolResult:
+    async def execute(self, match_result_path, aas_idShort, endpoint=None, dry_run=False, skip_warnings=False, **kwargs):
+        from mcp_aas.semantic.match import (Decision, Entity, infer_element_type, resolve_spec,
+            Candidate, safe_id_short, element_for_create, value_for_write, CONTAINER_TYPES)
+        from mcp_aas.semantic.runtime import cache_file
+        from mcp_aas.aas_utils import aas_loader
         endpoint = endpoint or DEFAULT_AAS_ENDPOINT
-
-        if not os.path.exists(match_result_path):
-            return ToolResult(
-                error=f"Matching result file not found at {match_result_path}. "
-                      f"Please call aas_match_inputs() first to generate it."
-            )
-
+        applied, created, skipped, failures = [], [], [], []
+        client = BasyxApiClient(endpoint, headers={"accept": "application/json", "Content-Type": "application/json"})
         try:
-            with open(match_result_path, "r", encoding="utf-8") as f:
-                match_results = json.load(f)
-        except Exception as e:
-            return ToolResult(error=f"Failed to load match result file: {e}")
-
-        def _str_or_empty(v):
-            return "" if v is None else str(v)
-
-        client = BasyxApiClient(
-            endpoint,
-            headers={"accept": "application/json", "Content-Type": "application/json"},
-        )
-
-        applied = []    # PATCHed existing properties
-        created = []    # POSTed new elements
-        skipped = []    # could not process
-
-        for item in match_results:
-            # Check if user selected this match (default to True for backward compatibility)
-            if not item.get("selected", True):
-                continue
-
-            query = item.get("query") or {}
-            value = query.get("value")
-            entity = _str_or_empty(query.get("entity"))
-            description_text = _str_or_empty(query.get("description"))
-
-            # Handle multi-select format (chosen_candidates array) or single select (chosen_candidate)
-            chosen_candidates = item.get("chosen_candidates", [])
-            if not chosen_candidates:
-                # Fall back to single chosen_candidate for backward compatibility
-                chosen = item.get("chosen_candidate") or {}
-                if chosen and chosen.get("API_path"):
-                    chosen_candidates = [chosen]
-
-            if not chosen_candidates:
-                skipped.append({"entity": entity, "reason": "no chosen candidates"})
-                continue
-
-            # Process each chosen candidate (supports multi-select)
-            for chosen in chosen_candidates:
-                ctype = _str_or_empty(chosen.get("type"))
-                api_path = chosen.get("API_path") or chosen.get("apiPath")
-                if not api_path:
-                    skipped.append({"entity": entity, "reason": f"missing API_path for {chosen.get('idShort', 'unknown')}"})
-                    continue
-
-                try:
-                    if ctype == "Submodel":
-                        # Create a new SubmodelElement directly under the submodel
-                        # root. The candidate's API_path is /submodels/{id}; root
-                        # creation targets its /submodel-elements sub-resource.
-                        # (The SMC/SML branch below instead POSTs to the element
-                        # path so the child lands inside that collection.)
-                        try:
-                            id_short_safe = make_valid_idshort(entity)
-                        except Exception:
-                            id_short_safe = entity
-
-                        root_post_url = api_path.rstrip("/") + "/submodel-elements"
-                        root_payload = {
-                            "modelType": "Property",
-                            "idShort": id_short_safe,
-                            "valueType": "xs:string",
-                            "value": _str_or_empty(value),
-                            "description": [
-                                {"language": "en", "text": _str_or_empty(description_text)}
-                            ],
-                        }
-
-                        await client.post(root_post_url, data=root_payload)
-                        created.append({
-                            "entity": entity,
-                            "post_url": root_post_url,
-                            "new_element": root_payload,
-                        })
-                    elif ctype not in ("SubmodelElementCollection", "SubmodelElementList"):
-                        elem = await client.get(api_path)
-                        model_type = (elem or {}).get("modelType") or ctype  # trust server if present
-                        value_api = api_path.rstrip("/") + "/$value"
-
-                        try:
-                            if model_type == "MultiLanguageProperty":
-                                current_val = elem.get("value") if isinstance(elem, dict) else None
-                                elem["value"] = _ensure_ml_value(current_val, _str_or_empty(value), lang="en")
-                                await client.put(api_path, data=elem)
-
-                                applied.append({
-                                    "entity": entity,
-                                    "api": api_path,
-                                    "written_value": elem["value"],
-                                    "target_type": model_type,
-                                    "idShort": elem.get("idShort"),
-                                    "method": "PUT",
-                                })
-
-                            else:
-                                current_val = elem.get("value") if isinstance(elem, dict) else None
-                                elem["value"] = _str_or_empty(value)
-                                await client.put(api_path, data=elem)
-
-                                applied.append({
-                                    "entity": entity,
-                                    "api": value_api,
-                                    "written_value": _str_or_empty(value),
-                                    "target_type": model_type or "Unknown",
-                                    "idShort": chosen.get("idShort"),
-                                })
-
-                        except Exception as e:
-                            skipped.append({
-                                "entity": entity,
-                                "api_path": value_api,
-                                "target_type": model_type,
-                                "error": str(e),
-                            })
-                    else:
-                        # --- Create new submodel element at the submodel root:
-                        # POST /submodels/{submodelIdentifier}/submodel-elements
-                        post_url = api_path+'?level=deep&extent=withoutBlobValue'
-                        try:
-                            id_short_safe = make_valid_idshort(entity)
-                        except Exception as e:
-                            id_short_safe = entity
-
-                        new_element_payload = {
-                            "modelType": "Property",
-                            "idShort": id_short_safe,
-                            "valueType": "xs:string",
-                            "value": _str_or_empty(value),
-                            "description": [
-                                {"language": "en", "text": _str_or_empty(description_text)}
-                            ]
-                        }
-
-                        await client.post(post_url, data=new_element_payload)
-                        created.append({
-                            "entity": entity,
-                            "post_url": post_url,
-                            "new_element": new_element_payload,
-                        })
-
-                except Exception as e:
-                    skipped.append(
-                        {
-                            "entity": entity,
-                            "api_path": api_path,
-                            "target_type": ctype,
-                            "error": str(e),
-                        }
-                    )
-
-        summary = {
-            "aas_idShort": aas_idShort,
-            "endpoint": endpoint,
-            "applied": applied,
-            "created": created,
-            "skipped": skipped,
-        }
-
-        # Refresh exported artifacts from BaSyx so temp snapshots can reflect
-        # post-population AAS state rather than creation-time files.
-        refreshed_json_path = None
-        refreshed_aasx_path = None
-        try:
+            cache_file(aas_idShort, ".json")
+            items = json.loads(Path(match_result_path).read_text(encoding="utf-8"))
+            if not isinstance(items, list):
+                raise ValueError("Matching file must contain a list of decisions")
             shells = await client.get_shells()
-            aas_id = None
-            if isinstance(shells, list):
-                for shell in shells:
-                    if shell.get("idShort") == aas_idShort:
-                        aas_id = shell.get("id")
-                        break
-
-            if aas_id:
-                refreshed_json_path = await aas_loader.get_json(
-                    endpoint=endpoint,
-                    aas_id=aas_id,
-                    base_dir=TEMP_DIR,
-                )
+            targets = [shell for shell in shells if shell.get("idShort") == aas_idShort]
+            if len(targets) != 1:
+                raise ValueError("Target idShort must identify exactly one live AAS")
+            shell = targets[0]
+            refs = await client.get(f"/shells/{encode_id(shell['id'])}/submodel-refs")
+            refs = refs.get("result", []) if isinstance(refs, dict) else refs
+            owned = {k['value'] for ref in refs for k in ref.get('keys', []) if k.get('type') == 'Submodel'}
+            for item in items:
+                entity_name = (item.get("query") or {}).get("entity", "")
+                if not item.get("selected", True):
+                    skipped.append({"entity": entity_name, "reason": "not selected"})
+                    continue
+                if item.get("aas_id") and item["aas_id"] != shell['id']:
+                    failures.append({"entity": entity_name, "error": "Plan belongs to a different AAS"})
+                    continue
+                if skip_warnings and (item.get("warnings") or (item.get("decision") or {}).get("warnings")):
+                    skipped.append({"entity": entity_name, "reason": "decision has warnings"})
+                    continue
+                chosen = item.get("chosen_candidates") or [item.get("chosen_candidate") or {}]
+                for candidate in chosen:
+                    try:
+                        query = item.get("query") or {}
+                        entity = Entity.parse(query)
+                        typed = item.get("decision")
+                        if typed and typed.get("action") == "skip":
+                            skipped.append({"entity": entity_name, "reason": typed.get("reason", "no match")})
+                            continue
+                        path = target_path(candidate, owned)
+                        live = await client.get(path)
+                        kind = live.get("modelType")
+                        if typed:
+                            known = {f.name for f in fields(Decision)}
+                            decision = Decision(**{k: v for k, v in typed.items() if k in known})
+                            if decision.path != candidate.get("semantic_path"):
+                                raise ValueError("Decision path and selected candidate disagree")
+                            if decision.value != entity.value:
+                                raise ValueError("Query value and typed decision disagree; review the typed plan")
+                        else:
+                            action = "create" if kind in CONTAINER_TYPES + ("Submodel",) else "write"
+                            spec = infer_element_type(entity)
+                            if action == "create":
+                                spec, _ = resolve_spec(entity, Candidate(path, live.get('idShort'), kind, 0., None,
+                                    type_value_list_element=live.get('typeValueListElement')), None)
+                            decision = Decision(entity.entity, entity.value, entity.unit, entity.source, action,
+                                "hosted" if action == "create" else "auto", "reviewed legacy matching result", path=path,
+                                model_type=spec.model_type if action == "create" else kind,
+                                container_type=kind if action == "create" else None,
+                                value_type=spec.value_type, id_short=None if kind == "SubmodelElementList" else safe_id_short(entity.entity),
+                                min_value=spec.min_value, max_value=spec.max_value, content_type=spec.content_type)
+                        if decision.value is None:
+                            raise ValueError("No value to apply")
+                        if decision.action == "write":
+                            if kind != decision.model_type:
+                                raise ValueError("Target type changed since matching; run the match again")
+                            payload = value_for_write(decision)
+                            if not dry_run:
+                                await client.patch(path + "/$value", data=json.dumps(payload), reraise=True)
+                            applied.append({"entity": entity_name, "api": path, "written_value": payload})
+                        elif decision.action == "create":
+                            if kind not in CONTAINER_TYPES + ("Submodel",):
+                                raise ValueError("A new element requires a collection, list or submodel host")
+                            if decision.container_type and decision.container_type != kind:
+                                raise ValueError("Host type changed since matching")
+                            if kind == "SubmodelElementList":
+                                if live.get("typeValueListElement") != decision.model_type:
+                                    raise ValueError("New element violates the list's declared child type")
+                                decision.id_short = None
+                                if live.get("valueTypeListElement"):
+                                    decision.value_type = live["valueTypeListElement"]
+                            payload = element_for_create(decision)
+                            if kind == "SubmodelElementList" and live.get("semanticIdListElement"):
+                                payload["semanticId"] = live["semanticIdListElement"]
+                            post_path = path + "/submodel-elements" if kind == "Submodel" else path
+                            if not dry_run:
+                                await client.post(post_path, data=payload, reraise=True)
+                            created.append({"entity": entity_name, "post_url": post_path, "new_element": payload})
+                        else:
+                            raise ValueError("Unknown decision action")
+                    except Exception as exc:
+                        failures.append({"entity": entity_name, "error": str(exc)})
+            summary = {"aas_idShort": aas_idShort, "dry_run": dry_run, "applied": applied,
+                       "created": created, "skipped": skipped, "failures": failures}
+            if not dry_run and (applied or created):
                 try:
-                    refreshed_aasx_path = await aas_loader.get_aasx(
-                        endpoint=endpoint,
-                        aas_id=aas_id,
-                        base_dir=TEMP_DIR,
-                    )
-                except Exception:
-                    refreshed_aasx_path = None
-        except Exception:
-            refreshed_json_path = None
-            refreshed_aasx_path = None
-
-        summary["refreshed_json_path"] = refreshed_json_path
-        summary["refreshed_aasx_path"] = refreshed_aasx_path
-
-        # Ensure TEMP_DIR exists
-        os.makedirs(TEMP_DIR, exist_ok=True)
-
-        # Prepare summary filename
-        # Extract base name from match_result_path (e.g., "DOC_battery2_matching_result.json" -> "DOC_battery2")
-        match_base = os.path.basename(match_result_path)
-        
-        # Remove extension
-        if match_base.endswith(".json"):
-            match_base = match_base[:-5]
-            
-        # Recursive stripping of known suffixes to handle combinations like "_matching_result_edit"
-        # We loop until no more changes to ensure order doesn't matter as much
-        # Suffixes to strip: _edit, _matching_result
-        # Also maybe _matching_results (plural)? Just in case.
-        
-        changed = True
-        while changed:
-            changed = False
-            if match_base.endswith("_edit"):
-                match_base = match_base[:-5]
-                changed = True
-            elif match_base.endswith("_matching_result"):
-                match_base = match_base[:-16]
-                changed = True
-            elif match_base.endswith("_matching_results"):
-                match_base = match_base[:-17]
-                changed = True
-            
-        summary_path = os.path.join(TEMP_DIR, f"{match_base}_populating_summary.json")
-        with open(summary_path, "w", encoding="utf-8") as f:
-            json.dump(summary, f, indent=2, ensure_ascii=False)
-
-        applied_n = len(applied)
-        created_n = len(created)
-        skipped_n = len(skipped)
-
-        return ToolResult(
-            output=(
-                f"For {aas_idShort} at {endpoint}: "
-                f"{applied_n} applied, {created_n} created, {skipped_n} skipped. "
-                f"Details saved to {summary_path}; "
-                f"refreshed_json={refreshed_json_path or 'n/a'}; "
-                f"refreshed_aasx={refreshed_aasx_path or 'n/a'}"
-            )
-        )
-
-
-
-
+                    snapshot = await aas_loader.get_json(endpoint, shell['id'], TEMP_DIR)
+                    await __import__('asyncio').to_thread(aas_loader.aas_json_parser, snapshot)
+                except Exception as exc:
+                    summary["refresh_error"] = str(exc)
+            summary_path = Path(TEMP_DIR) / (Path(match_result_path).stem + "_populating_summary.json")
+            summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+            message = f"{'Preview' if dry_run else 'Population'}: {len(applied)} applied, {len(created)} created, {len(skipped)} skipped, {len(failures)} failed. Details: {summary_path}"
+            return ToolResult(output=message, error="Some population decisions failed; inspect the summary" if failures else None)
+        except Exception as exc:
+            return ToolResult(error=f"aas_populate_inputs failed: {exc}")
+        finally:
+            await client.client.aclose()

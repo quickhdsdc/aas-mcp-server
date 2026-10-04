@@ -40,7 +40,7 @@ The `pyproject.toml` lives in the `MCP_AAS/` subdirectory:
 ```bash
 cd MCP_AAS
 pip install -e .            # core BaSyx tools (no LLM dependency)
-# pip install -e ".[semantic]"   # + FAISS / Azure-OpenAI semantic tools
+# pip install -e ".[semantic]"   # + NumPy / Azure-OpenAI semantic tools
 
 mcp-aas                       # stdio transport (default)
 # mcp-aas --transport sse --port 8077

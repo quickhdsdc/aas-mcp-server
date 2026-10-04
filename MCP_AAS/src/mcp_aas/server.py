@@ -48,8 +48,7 @@ else:
 
 def _semantic_available() -> bool:
     try:
-        import faiss  # noqa: F401
-        import langchain_openai  # noqa: F401
+        import openai  # noqa: F401
         import numpy  # noqa: F401
         return True
     except Exception:
@@ -100,7 +99,7 @@ class MCPServer:
             logger.warning(
                 "Semantic tools (aas_search_property, aas_match_inputs) disabled: "
                 "install the optional extra with `pip install mcp-aas[semantic]` "
-                "(faiss-cpu, numpy, langchain-openai, openai) to enable them."
+                "(numpy, openai) to enable them."
             )
 
     @asynccontextmanager
@@ -139,9 +138,9 @@ class MCPServer:
         tool_function = tool_param["function"]
 
         async def tool_method(**kwargs):
-            logger.info("Executing %s", tool_name)
+            logger.info("Executing {}", tool_name)
             result = await tool.execute(**kwargs)
-            logger.info("Completed %s", tool_name)
+            logger.info("Completed {}", tool_name)
             if hasattr(result, "model_dump"):
                 return json.dumps(result.model_dump())
             elif isinstance(result, dict):

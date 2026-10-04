@@ -35,6 +35,7 @@ def get_config_path() -> Optional[Path]:
 
 class LLMSettings(BaseModel):
     model: str = Field(default="", description="Model / deployment name")
+    embedding_model: str = Field(default="text-embedding-3-large-1", description="Embedding model / Azure deployment")
     base_url: str = Field(default="", description="API base URL (Azure endpoint)")
     api_key: str = Field(default="", description="API key")
     max_tokens: int = Field(4096, description="Maximum number of tokens per request")
@@ -94,6 +95,7 @@ class Config:
         if scalar_keys:
             llm_profiles["default"] = {
                 "model": scalar_keys.get("model", ""),
+                "embedding_model": scalar_keys.get("embedding_model", "text-embedding-3-large-1"),
                 "base_url": scalar_keys.get("base_url", ""),
                 "api_key": scalar_keys.get("api_key", ""),
                 "max_tokens": scalar_keys.get("max_tokens", 4096),

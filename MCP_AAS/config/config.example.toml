@@ -11,6 +11,7 @@
 
 [llm]
 model = "gpt-4o"                       # chat/ranking deployment name
+embedding_model = "text-embedding-3-large-1" # embedding deployment name
 base_url = "https://YOUR-RESOURCE.openai.azure.com/"
 api_key = "REPLACE_ME"
 api_type = "azure"                     # azure | openai
@@ -20,7 +21,7 @@ temperature = 1.0
 
 # Optional explicit embedding profile (used if [llm] is not azure-typed):
 # [llm.embedding]
-# model = "text-embedding-3-large-1"
+# embedding_model = "text-embedding-3-large-1"
 # base_url = "https://YOUR-RESOURCE.openai.azure.com/"
 # api_key = "REPLACE_ME"
 # api_type = "azure"

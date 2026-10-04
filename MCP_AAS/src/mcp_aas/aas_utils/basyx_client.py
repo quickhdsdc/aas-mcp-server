@@ -14,7 +14,7 @@ def encode_id(id: str):
 
 
 def decode_id(id: str):
-    id_dec = base64.urlsafe_b64decode(id).decode('ascii')
+    id_dec = base64.urlsafe_b64decode(id).decode('utf-8')
     return id_dec
 
 
@@ -33,6 +33,9 @@ class BasyxApiClient:
         self.client = httpx.AsyncClient(headers=self.headers, verify=ssl_verify, follow_redirects=True)
 
     def _build_url(self, path: str, base_url: str = None) -> str:
+        # BaSyx rejects raw brackets in HTTP paths for positional list members.
+        parts = urllib.parse.urlsplit(path)
+        path = urllib.parse.urlunsplit(parts._replace(path=parts.path.replace("[", "%5B").replace("]", "%5D")))
         if path.startswith("http://") or path.startswith("https://"):
             return path
         base = (base_url or self.base_url).rstrip('/')
