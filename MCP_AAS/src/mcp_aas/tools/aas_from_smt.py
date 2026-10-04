@@ -1,12 +1,17 @@
 from mcp_aas.tools.base import BaseTool, ToolResult
 import os
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 import ast
 import httpx
 from basyx.aas.model import AssetAdministrationShell, AssetInformation, AssetKind, ModelReference
 from mcp_aas.aas_utils.basyx_client import BasyxApiClient, encode_id, decode_id
 from mcp_aas.aas_utils import aas_loader
 from mcp_aas.resource_manager import TEMP_DIR, DEFAULT_AAS_ENDPOINT
+
+logger = logging.getLogger(__name__)
 
 
 class AASfromSMT(BaseTool):
@@ -27,8 +32,9 @@ class AASfromSMT(BaseTool):
                 "description": "The ID Short for the AAS to be created (e.g., 'NewProductAAS', 'Motor_XM2000')."
             },
             "list_smt_id": {
-                "type": "string",
-                "description": "a restrict python list of submodel template IDs, e.g., ['https://admin-shell.io/ZVEI/TechnicalData/Submodel/1/2', '...']"
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Submodel template IDs, e.g. ['https://admin-shell.io/ZVEI/TechnicalData/Submodel/1/2']."
             }
         },
         "required": ["aas_idShort", "list_smt_id"]
@@ -82,7 +88,7 @@ class AASfromSMT(BaseTool):
             
             if existing_aas:
                 new_aas_id = existing_aas.get("id")
-                print(f"AAS '{aas_idShort}' already exists with ID '{new_aas_id}'. Updating/Appending submodels.")
+                logger.info("AAS '%s' already exists with ID '%s'. Updating/Appending submodels.", aas_idShort, new_aas_id)
             else:
                  # Create new AAS
                 try:
@@ -128,7 +134,7 @@ class AASfromSMT(BaseTool):
             try:
                 aas_aasx_filepath = await aas_loader.get_aasx(endpoint=endpoint, aas_id=new_aas_id, base_dir=TEMP_DIR)
             except Exception as e:
-                print(f"Warning: Failed to save AASX after creation: {e}")
+                logger.warning("Failed to save AASX after creation: %s", e)
 
             # Success: summary output
             return ToolResult(output=json.dumps({

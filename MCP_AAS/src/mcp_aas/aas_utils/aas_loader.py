@@ -13,6 +13,8 @@ import zipfile
 import xml.etree.ElementTree as ET
 import re
 import logging
+
+logger = logging.getLogger(__name__)
 from dateutil import parser as date_parser
 
 
@@ -72,7 +74,7 @@ async def get_aasx(endpoint, aas_id, base_dir):
         raise RuntimeError(
             f"AASX download did not produce local file at '{filepath}' for aas_id '{aas_id}' (endpoint='{endpoint}')"
         )
-    print(f"Downloaded AASX file to {filepath}")
+    logger.info("Downloaded AASX file to %s", filepath)
 
     return filepath
 
@@ -98,7 +100,7 @@ async def get_json(endpoint, aas_id, base_dir):
         raise RuntimeError(
             f"JSON download did not produce local file at '{filepath}' for aas_id '{aas_id}' (endpoint='{endpoint}')"
         )
-    print(f"Downloaded json file to {filepath}")
+    logger.info("Downloaded JSON file to %s", filepath)
 
     return filepath
 
@@ -157,7 +159,7 @@ def aasx_parser(aasx_filepath: str) -> pd.DataFrame:
                         for obj in aas_objs:
                             aas_store.add(obj)
                 else:
-                    print(f"Unsupported file format: {aas_part}")
+                    logger.warning("Unsupported file format: %s", aas_part)
     df_aas, G = flatten_aas_object_store(aas_store, return_graph=True)
     
     import networkx as nx
@@ -391,14 +393,14 @@ def sanitize_aas_xml_values(xml_content: bytes) -> bytes:
     
     try:
         root = ET.fromstring(xml_content)
-        print(f"DEBUG: Root tag: {root.tag}")
+        logger.debug("Root tag: %s", root.tag)
         
         count = 0
         # Iterate over all elements
         for elem in root.iter():
             count += 1
             if count < 5:
-                print(f"DEBUG: Iterating element: {elem.tag}")
+                logger.debug("Iterating element: %s", elem.tag)
             
             # Check if it looks like a Property (has valueType and value children)
             # We don't rely on tag name ending in "Property" strictly, 
@@ -530,7 +532,7 @@ def sanitize_aas_xml_values(xml_content: bytes) -> bytes:
         return out.getvalue()
 
     except Exception as e:
-        print(f"XML Sanitization warning: {e}")
+        logger.warning("XML Sanitization warning: %s", e)
         return xml_content
 
 

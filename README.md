@@ -9,6 +9,8 @@ interoperability: it lets an LLM parse an AAS instance into an addressable
 knowledge graph and read, search, describe, populate, and delegate operations
 over a live BaSyx AAS repository.
 
+**Paper:** [Agentic active Asset Administration Shell for circular manufacturing](https://www.sciencedirect.com/science/article/pii/S0278612526001950). The paper presents an AAS-based architecture that connects semantic product-data integration with agent-driven shopfloor operation delegation.
+
 ## Repository layout
 
 | Path | What it is |
@@ -26,7 +28,7 @@ docker compose up -d
 ```
 
 This starts the BaSyx AAS environment and registries locally and loads the
-sample shells under `BaSyxMinimal/aas/`.
+sample shells under `BaSyxMinimal/aas/`. Published host ports bind to `127.0.0.1` for local development.
 
 > The Compose file ships throwaway local-dev MongoDB credentials
 > (`mongoAdmin` / `mongoPassword`). Change them before any non-local use.
