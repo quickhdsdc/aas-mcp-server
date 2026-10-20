@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "Standalone MCP server exposing Asset Administration Shell (AAS) tools over the Model Context Protocol."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { text = "LicenseRef-Dachuan-Shi-NC-1.0" }
 authors = [{ name = "Dachuan Shi" }]
 keywords = ["aas", "asset-administration-shell", "basyx", "mcp", "model-context-protocol", "industry-4.0"]
 
